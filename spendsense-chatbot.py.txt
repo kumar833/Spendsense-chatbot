@@ -1,0 +1,296 @@
+import tkinter as tk
+from tkinter import messagebox
+from datetime import datetime
+import pyttsx3
+import sqlite3
+import speech_recognition as sr
+
+# Initialize text-to-speech engine
+engine = pyttsx3.init()
+engine.setProperty('rate', 170)
+
+
+# Database setup
+def create_database():
+    try:
+        conn = sqlite3.connect("budget_data.db")
+        cursor = conn.cursor()
+        cursor.execute('''CREATE TABLE IF NOT EXISTS budget (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            date TEXT,
+                            salary REAL,
+                            savings REAL,
+                            expenses REAL
+                        )''')
+        conn.commit()
+        return conn, cursor
+    except sqlite3.Error as e:
+        messagebox.showerror("Database Error", f"An error occurred with the database: {e}")
+        return None, None
+
+
+conn, cursor = create_database()
+
+
+def speak(text):
+    engine.say(text)
+    engine.runAndWait()
+
+
+def fetch_previous_month_data():
+    try:
+        cursor.execute("SELECT date, salary, savings, expenses FROM budget ORDER BY id DESC LIMIT 1")
+        return cursor.fetchone()
+    except sqlite3.Error as e:
+        messagebox.showerror("Database Error", f"An error occurred while fetching data: {e}")
+        return None
+
+
+def fetch_all_previous_data():
+    try:
+        cursor.execute("SELECT date, salary, savings, expenses FROM budget ORDER BY id DESC")
+        return cursor.fetchall()
+    except sqlite3.Error as e:
+        messagebox.showerror("Database Error", f"An error occurred while fetching data: {e}")
+        return []
+
+
+def update_chat_window(message, tag="normal"):
+    chat_log.config(state=tk.NORMAL)
+    chat_log.insert(tk.END, message, tag)
+    chat_log.insert(tk.END, "\n")
+    chat_log.config(state=tk.DISABLED)
+    chat_log.yview(tk.END)
+
+
+def calculate_budget():
+    try:
+        total_salary = entry_salary.get().strip()
+        savings_goal = entry_savings.get().strip()
+        expenses = entry_expenses.get().strip()
+
+        if not total_salary or not savings_goal or not expenses:
+            messagebox.showwarning("Missing Input", "Please fill in all fields before calculating.")
+            return
+
+        total_salary = float(total_salary)
+        savings_goal = float(savings_goal)
+        expenses = float(expenses)
+        remaining_balance = total_salary - (savings_goal + expenses)
+
+        update_chat_window(f"\nSpendSense : Budget Summary ({datetime.now().strftime('%Y-%m-%d')})\n", "highlight")
+        update_chat_window(f"  💰 Salary: ₹{total_salary}\n")
+        update_chat_window(f"  💾 Savings: ₹{savings_goal}\n")
+        update_chat_window(f"  🏠 Expenses: ₹{expenses}\n")
+
+        if remaining_balance >= 0:
+            update_chat_window(f"  ✅ Remaining Balance: ₹{remaining_balance} (Well-managed budget!)\n\n", "success")
+            speak(f"Your remaining balance is ₹{remaining_balance}. Well-managed budget!")
+        else:
+            update_chat_window(f"  ❌ Remaining Balance: ₹{remaining_balance} (You are overspending!)\n\n", "error")
+            speak(f"Your remaining balance is ₹{remaining_balance}. You are overspending!")
+
+            # Provide tips if over budget
+            overspending_tips = [
+                "💡 Tip: Consider reducing your expenses to save more.",
+                "💡 Tip: Review your discretionary spending and cut back where possible.",
+                "💡 Tip: Try to save at least 20% of your income to avoid overspending.",
+                "💡 Tip: Track your expenses daily to avoid surprises at the end of the month.",
+            ]
+            tip = overspending_tips[datetime.now().day % len(overspending_tips)]
+            update_chat_window(f"  {tip}\n", "tip")
+            speak(tip)
+
+        cursor.execute("INSERT INTO budget (date, salary, savings, expenses) VALUES (?, ?, ?, ?)",
+                       (datetime.now().strftime('%Y-%m-%d'), total_salary, savings_goal, expenses))
+        conn.commit()
+
+    except ValueError:
+        messagebox.showerror("Input Error", "Please enter valid numbers for all fields.")
+    except sqlite3.Error as e:
+        messagebox.showerror("Database Error", f"An error occurred while saving data: {e}")
+
+
+def take_voice_input_for_budget():
+    recognizer = sr.Recognizer()
+    with sr.Microphone() as source:
+        speak("Please ask a question about your budget, savings, or expenses.")
+        print("Listening for query...")
+        audio = recognizer.listen(source)
+        try:
+            query = recognizer.recognize_google(audio)
+            speak(f"You asked: {query}")
+            process_query(query.lower())
+        except sr.UnknownValueError:
+            messagebox.showerror("Voice Recognition Error", "Sorry, I couldn't understand that.")
+        except sr.RequestError:
+            messagebox.showerror("Voice Recognition Error", "Sorry, there was an issue with the service.")
+
+
+def process_query(query):
+    if "how can i save more" in query:
+        speak(
+            "To save more, reduce discretionary spending, track your expenses daily, and aim for a savings goal of at least 20% of your income.")
+    elif "how are my expenses" in query or "spending habits" in query:
+        prev_data = fetch_previous_month_data()
+        if prev_data:
+            date, salary, savings, expenses = prev_data
+            if expenses > salary * 0.7:
+                speak(
+                    "Your expenses are quite high. Try reducing discretionary spending and setting a clear budget for each category.")
+            else:
+                speak(
+                    f"Your expenses seem manageable at ₹{expenses} compared to your salary of ₹{salary}. Keep up the good work!")
+        else:
+            speak("I don't have enough data to analyze your expenses. Please enter your budget data first.")
+    elif "what are my savings" in query or "how much have i saved" in query:
+        prev_data = fetch_previous_month_data()
+        if prev_data:
+            _, _, savings, _ = prev_data
+            speak(f"Your savings goal is ₹{savings}. Great job keeping up with your savings!")
+        else:
+            speak("I don't have enough data to check your savings. Please enter your budget data first.")
+    elif "how to reduce expenses" in query:
+        speak(
+            "You can reduce your expenses by cutting back on unnecessary subscriptions, eating out less, and reviewing your utility costs.")
+    else:
+        speak("I'm sorry, I didn't quite understand that. Could you please rephrase your question?")
+
+
+def show_previous_data():
+    prev_data = fetch_previous_month_data()
+    if prev_data:
+        date, salary, savings, expenses = prev_data
+        update_chat_window(f"\nPrevious Month's Budget: {date}\n", "highlight")
+        update_chat_window(f"  💰 Salary: ₹{salary}\n")
+        update_chat_window(f"  💾 Savings: ₹{savings}\n")
+        update_chat_window(f"  🏠 Expenses: ₹{expenses}\n")
+
+        compare_budget(salary, savings, expenses)
+    else:
+        messagebox.showwarning("No Data", "No previous data found. Please enter your budget first.")
+
+
+def show_all_previous_data():
+    prev_data = fetch_all_previous_data()
+    if prev_data:
+        update_chat_window(f"\nAll Previous Data:\n", "highlight")
+        for entry in prev_data:
+            date, salary, savings, expenses = entry
+            update_chat_window(f"\nDate: {date}")
+            update_chat_window(f"  💰 Salary: ₹{salary}")
+            update_chat_window(f"  💾 Savings: ₹{savings}")
+            update_chat_window(f"  🏠 Expenses: ₹{expenses}\n")
+
+        compare_all_previous_data(prev_data)
+    else:
+        messagebox.showwarning("No Data", "No previous data found. Please enter your budget first.")
+
+
+def compare_budget(prev_salary, prev_savings, prev_expenses):
+    try:
+        total_salary = float(entry_salary.get())
+        savings_goal = float(entry_savings.get())
+        expenses = float(entry_expenses.get())
+
+        if total_salary == prev_salary and savings_goal == prev_savings and expenses == prev_expenses:
+            update_chat_window(f"\nYour budget for the current month is the same as the previous month.\n", "normal")
+            speak("Your budget is the same as the previous month. Well done on staying consistent!")
+
+        elif expenses > prev_expenses:
+            update_chat_window(f"\nYou have overspent compared to last month.\n", "error")
+            speak("You have overspent compared to last month. Please review your expenses.")
+        elif savings_goal > prev_savings:
+            update_chat_window(f"\nYou've saved more this month! Great job!\n", "success")
+            speak("You've saved more this month! Keep up the great work!")
+        else:
+            update_chat_window(f"\nYour savings have decreased this month. Consider saving more.\n", "error")
+            speak("Your savings have decreased this month. Try to save more for next month.")
+
+    except ValueError:
+        messagebox.showerror("Input Error", "Please enter valid numbers for all fields.")
+
+
+def compare_all_previous_data(prev_data):
+    try:
+        total_salary = float(entry_salary.get())
+        savings_goal = float(entry_savings.get())
+        expenses = float(entry_expenses.get())
+
+        for entry in prev_data:
+            date, prev_salary, prev_savings, prev_expenses = entry
+
+            if total_salary == prev_salary and savings_goal == prev_savings and expenses == prev_expenses:
+                update_chat_window(f"\nYour budget for {date} is the same as the current month.\n", "normal")
+                speak(f"Your budget for {date} is the same as the current month.")
+
+            elif expenses > prev_expenses:
+                update_chat_window(f"\nYou overspent in {date}.\n", "error")
+                speak(f"You overspent in {date}. Please review your expenses.")
+            elif savings_goal > prev_savings:
+                update_chat_window(f"\nYou saved more in {date}! Great job!\n", "success")
+                speak(f"You saved more in {date}! Keep up the good work!")
+            else:
+                update_chat_window(f"\nYour savings decreased in {date}. Consider saving more.\n", "error")
+                speak(f"Your savings decreased in {date}. Try to save more for next month.")
+
+    except ValueError:
+        messagebox.showerror("Input Error", "Please enter valid numbers for all fields.")
+
+
+# UI setup
+root = tk.Tk()
+root.title("SpendSense AI – Smart Budget Planner")
+root.geometry("550x800")
+root.configure(bg="#F5F5F5")
+root.resizable(False, False)
+
+chat_log = tk.Text(root, bg="white", fg="black", font=("Arial", 12), state=tk.DISABLED, wrap=tk.WORD)
+chat_log.place(x=20, y=20, width=500, height=300)
+chat_log.tag_configure("highlight", foreground="#0078D4", font=("Arial", 12, "bold"))
+chat_log.tag_configure("success", foreground="#34A853", font=("Arial", 12))
+chat_log.tag_configure("error", foreground="#EA4335", font=("Arial", 12))
+
+
+def display_greeting():
+    update_chat_window("SpendSense AI: Hello! Let's optimize your finances! 💰\n\n", "highlight")
+
+
+display_greeting()
+
+frame = tk.Frame(root, bg="#E0E0E0", bd=2, relief=tk.RIDGE)
+frame.place(x=20, y=340, width=500, height=260)
+
+tk.Label(frame, text="💰 Salary (₹):", font=("Arial", 12, "bold"), bg="#E0E0E0").grid(row=0, column=0, sticky="w",
+                                                                                     pady=5)
+entry_salary = tk.Entry(frame, font=("Arial", 12), width=25)
+entry_salary.grid(row=0, column=1, padx=10)
+
+tk.Label(frame, text="💾 Savings (₹):", font=("Arial", 12, "bold"), bg="#E0E0E0").grid(row=1, column=0, sticky="w",
+                                                                                      pady=5)
+entry_savings = tk.Entry(frame, font=("Arial", 12), width=25)
+entry_savings.grid(row=1, column=1, padx=10)
+
+tk.Label(frame, text="🏠 Expenses (₹):", font=("Arial", 12, "bold"), bg="#E0E0E0").grid(row=2, column=0, sticky="w",
+                                                                                       pady=5)
+entry_expenses = tk.Entry(frame, font=("Arial", 12), width=25)
+entry_expenses.grid(row=2, column=1, padx=10)
+
+# Buttons for actions
+btn_take_voice_input = tk.Button(root, text="🎤 Ask a Question", font=("Arial", 12, "bold"), bg="#FF5722", fg="white",
+                                 command=take_voice_input_for_budget)
+btn_take_voice_input.place(x=20, y=615, width=500, height=40)
+
+btn_calculate_budget = tk.Button(root, text="🔢 Calculate Budget", font=("Arial", 12, "bold"), bg="#4CAF50", fg="white",
+                                 command=calculate_budget)
+btn_calculate_budget.place(x=20, y=670, width=500, height=40)
+
+btn_show_previous_data = tk.Button(root, text="🔎 Show Previous Data", font=("Arial", 12, "bold"), bg="#2196F3",
+                                   fg="white", command=show_previous_data)
+btn_show_previous_data.place(x=20, y=725, width=500, height=40)
+
+btn_show_all_previous_data = tk.Button(root, text="📜 Show All Previous Data", font=("Arial", 12, "bold"), bg="#9C27B0",
+                                       fg="white", command=show_all_previous_data)
+btn_show_all_previous_data.place(x=20, y=780, width=500, height=40)
+
+root.mainloop()
